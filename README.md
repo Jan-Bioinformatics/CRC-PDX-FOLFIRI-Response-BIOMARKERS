@@ -1,52 +1,138 @@
-# Longitudinal Transcriptomic Analysis of FOLFIRI Response in CRC PDX Models
+# Transcriptomic Determinants of FOLFIRI / 5-FU Response in Colorectal Cancer PDX Models
 
-R code for the longitudinal RNA-seq analysis in my MSc dissertation, *Characterising Transcriptomic Determinants of FOLFIRI/5-FU Response in Colorectal Cancer using Patient-Derived Xenograft Models* (MSc Bioinformatics and Computational Genomics, Queen's University Belfast, 2026).
+R analysis code for my MSc dissertation (Bioinformatics and Computational Genomics, Queen's University Belfast, 2026). The project uses bulk RNA-seq data from colorectal cancer (CRC) liver-metastasis **patient-derived xenograft (PDX)** models to characterise transcriptional differences between responders and non-responders to FOLFIRI / 5-FU.
 
-## Overview
+- **Responders** are **Partial Response (PR)** models.
+- **Non-responders** are **Progressive Disease (PD)** models.
 
-PDX models were sampled at three timepoints: **Placebo**, **24 hours** and **6 weeks** of FOLFIRI treatment. Response (PR vs PD) was classified from the 3–6 week average tumour volume change.
+The analysis has two arms:
 
-Three analyses are included:
+| Arm | Question | Design |
+|---|---|---|
+| **Baseline (cross-sectional)** | Do untreated tumours that will respond differ from those that won't? | Unpaired PR vs PD on baseline samples; response averaged over weeks 3–6 |
+| **Longitudinal** | How does treatment change the transcriptome over time, and does that change differ between PR and PD? | The same PDX models sampled at Placebo, 24 h and 6 weeks of treatment |
 
-1. **Treatment effect**: paired comparisons, matched by PDX model, ignoring response (24h vs Placebo, 6w vs Placebo, 6w vs 24h)
-2. **PR vs PD within each arm**: unpaired comparisons at Placebo, 24h and 6w
-3. **Treatment × Response interaction**: Placebo vs 6w (`~ Response + Treatment + Response:Treatment`)
+---
 
-Each analysis includes:
-- Differential expression (DESeq2)
-- Pathway enrichment: GSEA, ssGSEA and ORA with Hallmark, KEGG and GO gene sets
-- Transcription factor activity (DoRothEA + decoupleR ULM)
-- Visualisation: volcano plots, GSEA bar plots, TF activity plots, waterfall plots
+## Repository contents
 
-## Repository structure
+| Script | Analysis | Design formula |
+|---|---|---|
+| `Baseline_PR_vs_PD.R` | Baseline PR vs PD (with SD as context) | `~ Response` |
+| `Long_overall_timepoint.R` | Treatment effect over time: 24h vs Placebo, 6wks vs Placebo, 6wks vs 24h | `~ Case_ID + Treatment` (paired) |
+| `Long_Response_PR_vs_PD.R` | PR vs PD within each arm: Placebo, 24h, 6wks | `~ Response_3_6wk` (unpaired) |
+| `Long_Interaction_Placebo_vs_6wks.R` | Does the Placebo → 6wks change differ between PR and PD? | `~ Response + Treatment + Response:Treatment` |
+
+### Suggested run order
+
+1. `Baseline_PR_vs_PD.R`. This runs on its own and has no dependency on the other scripts.
+2. `Long_overall_timepoint.R`
+3. `Long_Response_PR_vs_PD.R`
+4. `Long_Interaction_Placebo_vs_6wks.R` (run last, as planned in the study design)
+
+Each longitudinal script reads the same counts and metadata files, so scripts 2–4 do not depend on each other's outputs.
+
+---
+
+## Workflow at a glance
+
+Every script follows the same layout:
 
 ```
-├── 01_treatment_effect/     # Paired timepoint comparisons
-├── 02_PR_vs_PD/             # Placebo, 24h and 6w response comparisons
-├── 03_interaction/          # Treatment × Response model
-└── README.md
+Header           purpose, workflow, inputs, outputs
+0. Setup         libraries, project paths
+1. Config        every threshold / parameter in one place
+2. Load data     counts + metadata, sample alignment
+3. Resources     MSigDB gene sets, DoRothEA / CollecTRI regulons
+4. Helpers       reusable, documented functions
+5+ Steps         analysis in numbered steps
+Last             sessionInfo()
 ```
+
+### Methods used
+
+| Step | Method | Package |
+|---|---|---|
+| Batch correction (baseline) | ComBat-seq on raw counts | `sva` |
+| Differential expression | Negative-binomial GLM, Wald test, BH-adjusted | `DESeq2` (`glmGamPoi` for paired models) |
+| LFC shrinkage (baseline) | apeglm | `apeglm` |
+| Sample QC | VST + PCA, Cook's distance, library-size sensitivity re-fits | `DESeq2` |
+| Global structure (baseline) | PERMANOVA, PERMDISP, NMDS | `vegan` |
+| Pre-ranked GSEA | Wald statistic ranking; Hallmark, KEGG (legacy), GO (C5), C6 | `clusterProfiler`, `msigdbr` |
+| Over-representation | Hypergeometric test of DEGs | `clusterProfiler::enricher` |
+| Single-sample scores | ssGSEA + Wilcoxon / Kruskal-Wallis | `GSVA` |
+| Dual GSEA consensus | Pre-ranked NES vs ssGSEA delta / difference-in-differences | custom |
+| TF activity | Univariate linear model on DoRothEA (A/B/C) and CollecTRI regulons | `decoupleR`, `dorothea` |
+| Gene-level validation | edgeR TMM log2CPM boxplots | `edgeR` |
+| Subtype context | CMS / CRIS association, Fisher's exact test (descriptive only) | base R |
+
+---
+
+## Conventions
+
+- **Direction:** a positive log2FC, NES, ssGSEA delta or TF score means **higher in the first-named group** (PR in response analyses; the later timepoint in treatment analyses). PD and Placebo are the reference levels.
+- **Main thresholds:**
+  - DEGs: `padj < 0.05` and `|log2FC| > 0.585` (1.5-fold); the interaction model uses `|log2FC| > 1`.
+  - Pre-filter: genes with ≥ 10 total reads.
+  - Pathways and TFs: BH-adjusted `p < 0.05` unless stated in the script header.
+- **Seed:** `set.seed(123)` is used throughout for reproducibility.
+- **IDs:**
+  - `Case_ID` (e.g. `CRC0081`) identifies the patient / PDX model line.
+  - The full sample barcode (e.g. `CRC0081LMX0B02202TUMFF0100`) identifies the individual specimen.
+
+---
+
+## Expected project structure
+
+The scripts use relative paths from a project root (set with `setwd()` at the top of each script):
+
+```
+PDX_PROJECT/
+├── 0_data/
+│   ├── PDX_Baseline/
+│   │   ├── counts/raw/        GEX_raw_counts_Human.csv, selected_metadata.csv
+│   │   ├── clinical_data/     clinical_data.xlsx
+│   │   └── annotations/       CMS.csv, CRIS.csv, YA_DTP_signatures.xlsx
+│   └── PDX_Longitudinal/
+│       └── counts/            CRC_graft_raw_counts_matrix_12022024.csv,
+│                              Complete_GraftCRC_colData_19022024.csv
+├── 2_pipelines/               fitted DESeq2 objects (.rds), full DE tables
+└── 3_output/                  figures and result tables (created by the scripts)
+```
+
+To run on another machine, edit the `setwd()` line and the path constants in **Section 0** of each script. Nothing else needs changing.
+
+---
 
 ## Requirements
 
-- **R:** 4.6.1
-- **Differential expression:** DESeq2, glmGamPoi
-- **Enrichment:** clusterProfiler, msigdbr, GSVA
-- **TF activity:** dorothea, decoupleR
-- **Plotting:** ggplot2, ggrepel, patchwork, ComplexHeatmap
-- **Data handling:** tidyverse
+- **R:** ≥ 4.3
+- **Bioconductor:** `DESeq2`, `glmGamPoi`, `apeglm`, `sva`, `edgeR`, `clusterProfiler`, `enrichplot`, `GSVA`, `decoupleR`, `dorothea`, `ComplexHeatmap`
+- **CRAN:** `tidyverse`, `msigdbr`, `ggrepel`, `ggpubr`, `patchwork`, `circlize`, `matrixStats`, `vegan`, `readxl`, `scales`, `tidygraph`, `ggraph`
 
-## Usage
+The longitudinal scripts contain an `INSTALL_PACKAGES` switch for a first-time setup. Exact package versions are printed by `sessionInfo()` at the end of every script.
 
-1. Update the paths at the top of each script (`clinicals`, `pipelines`, `output`).
-2. Run the scripts in the folder order above.
-3. Results tables (CSV) and figures (PNG) are written to the `output` directory.
+---
 
 ## Data availability
 
-Raw count data and clinical metadata are not included. The PDX models come from the XENTURION biobank (Candiolo Cancer Institute, Italy; Leto et al., 2024, *Nature Communications*), and data access is subject to the original data providers.
+Raw counts and clinical metadata are **not included** in this repository. The PDX models and sequencing data come from the Candiolo mCRC biobank (Turin). Access is subject to the data owners' approval.
+
+---
+
+## Notes and limitations
+
+- **Small group sizes:** PR samples are few in some comparisons, notably 24h. Results there should be read as exploratory.
+- **Repeated samples:** at baseline, a few models contribute more than one sample, and these are treated as independent.
+- **Outlier checks:** sensitivity re-fits are included in `Long_overall_timepoint.R` for one low-depth outlier sample and for the lowest-depth libraries.
+- **HBA2:** this gene appears in the interaction model, and the script includes a check because it may reflect blood contamination.
+- **Subtypes:** CMS / CRIS subtype associations are descriptive only.
+
+---
 
 ## Author
 
-Janmita Kaverimane Umesh, MSc Bioinformatics and Computational Genomics, Queen's University Belfast
-Supervisor: Prof. Simon McDade
+**Dr Janmita Kaverimane Umesh**, MSc Bioinformatics and Computational Genomics, Queen's University Belfast
+
+- GitHub: [Jan-Bioinformatics](https://github.com/Jan-Bioinformatics)
+- LinkedIn: [dr-k-u-janmita](www.linkedin.com/in/dr-janmita-kaverimane-umesh-3393a431a)
